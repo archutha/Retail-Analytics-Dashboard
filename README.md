@@ -24,28 +24,42 @@ Cleaned and transformed data using SQL queries
 Built KPI-focused and exploratory analysis queries
 Connected Snowflake to Power BI
 Developed an interactive dashboard using DAX measures and visuals
+
 **Key Metrics (KPIs)**
 Total Sales
 Total Profit
 Total Orders
 Profit Margin
+
 **Key Insights**
+
 **Regional Performance**
+
 West and East regions generate the highest sales
 Central region consistently shows negative profitability, indicating operational inefficiencies
+
 **Discount Impact**
+
 Higher discounting in the Central region is closely linked to lower profit margins
 Regions with more controlled discount strategies perform better overall
+
 **Category Performance**
+
 Technology is the strongest category in terms of revenue
 Furniture underperforms in profitability despite steady sales volume
+
 **Segment Analysis**
+
 Consumer segment contributes the most to overall sales
 Home Office segment delivers the highest profit margin
+
 **Shipping Analysis**
+
 Standard Class accounts for most shipping delays
 Same Day shipping is the fastest option but used less frequently
+
 **How to Use**
+
 Download the .pbix file from the dashboard/ folder
 Open it using Power BI Desktop
 Use filters and visuals to explore insights interactively
