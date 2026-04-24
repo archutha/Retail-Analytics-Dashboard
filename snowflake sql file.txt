@@ -1,0 +1,418 @@
+Create or replace warehouse portfolio_wh
+with warehouse_size = 'XSMALL'
+AUTO_SUSPEND = 60
+AUTO_RESUME = TRUE;
+
+CREATE OR REPLACE DATABASE portfolio_db;
+CREATE OR REPLACE SCHEMA portfolio_db.retail_analytics;
+
+-- set context
+USE WAREHOUSE portfolio_wh;
+USE DATABASE portfolio_db;
+USE SCHEMA retail_analytics;
+
+-- file format
+Create or replace file format superstore_csv_format
+type = CSV
+SKIP_HEADER = 1
+FIELD_OPTIONALLY_ENCLOSED_BY = '"'
+TRIM_SPACE = TRUE
+ENCODING = 'WINDOWS1252';
+-- Encountered character encoding issues due to non-UTF8 characters in the dataset (e.g., accented characters). Resolved by specifying appropriate file encoding (WINDOWS1252) in Snowflake file format during ingestion.
+
+-- create stage
+create or replace stage superstore_stage
+file_format = superstore_csv_format;
+
+--raw table
+CREATE OR REPLACE TABLE superstore_raw (
+    "Row ID" INT,
+    "Order ID" STRING,
+    "Order Date" STRING,
+    "Ship Date" STRING,
+    "Ship Mode" STRING,
+    "Customer ID" STRING,
+    "Customer Name" STRING,
+    "Segment" STRING,
+    "Country" STRING,
+    "City" STRING,
+    "State" STRING,
+    "Postal Code" STRING,
+    "Region" STRING,
+    "Product ID" STRING,
+    "Category" STRING,
+    "Sub-Category" STRING,
+    "Product Name" STRING,
+    "Sales" FLOAT,
+    "Quantity" INT,
+    "Discount" FLOAT,
+    "Profit" FLOAT
+);
+
+show stages;
+list @superstore_stage;
+
+--copy into table from stage.
+copy into superstore_raw
+from @superstore_stage
+FILE_FORMAT = (FORMAT_NAME = superstore_csv_format);
+
+select count(*) from superstore_raw;
+select * from superstore_raw limit 30;
+
+-- creating clean table, to store clean data. 
+-- we standardized schema for consistency and usability
+CREATE OR REPLACE TABLE superstore_clean AS
+SELECT
+    "Row ID"                    AS row_id,
+    "Order ID"                  AS order_id,
+    TO_DATE("Order Date", 'MM/DD/YYYY') AS order_date,
+    TO_DATE("Ship Date", 'MM/DD/YYYY')  AS ship_date,
+    "Ship Mode"                 AS ship_mode,
+    "Customer ID"               AS customer_id,
+    "Customer Name"             AS customer_name,
+    "Segment"                   AS segment,
+    "Country"                   AS country,
+    "City"                      AS city,
+    "State"                     AS state,
+    "Postal Code"               AS postal_code,
+    "Region"                    AS region,
+    "Product ID"                AS product_id,
+    "Category"                  AS category,
+    "Sub-Category"              AS sub_category,
+    "Product Name"              AS product_name,
+    "Sales"                     AS sales,
+    "Quantity"                  AS quantity,
+    "Discount"                  AS discount,
+    "Profit"                    AS profit,
+    DATEDIFF('day',
+        TO_DATE("Order Date", 'MM/DD/YYYY'),
+        TO_DATE("Ship Date", 'MM/DD/YYYY')
+    ) AS shipping_delay_days,
+    ROUND(
+        CASE
+            WHEN "Sales" = 0 THEN NULL
+            ELSE "Profit" / "Sales"
+        END, 4
+    ) AS profit_margin,
+    CASE
+        WHEN "Profit" < 0 THEN 1
+        ELSE 0
+    END AS is_loss
+FROM superstore_raw;
+
+-- binary flag for is_loss, 1 is loss, 0 is profit. 
+-- profit_margin = profit made per dollar of sales. we calculate this because, even though a product is selling more than other but it might not be as profitable as the other. so profit margin reveals this. the more the profit margin the more profitable the product is. 
+
+select * from superstore_clean limit 10;
+select * from superstore_clean;
+select count(*) from superstore_clean;
+
+-- Null checks
+SELECT
+    COUNT_IF(order_id IS NULL) AS order_id_nulls,
+    COUNT_IF(order_date IS NULL) AS order_date_nulls,
+    COUNT_IF(ship_date IS NULL) AS ship_date_nulls,
+    COUNT_IF(customer_id IS NULL) AS customer_id_nulls,
+    COUNT_IF(region IS NULL) AS region_nulls,
+    COUNT_IF(sales IS NULL) AS sales_nulls,
+    COUNT_IF(profit IS NULL) AS profit_nulls
+FROM superstore_clean; 
+
+-- distribution
+SELECT
+    MIN(sales), MAX(sales), AVG(sales),
+    MIN(profit), MAX(profit), AVG(profit),
+    MIN(quantity), MAX(quantity), AVG(quantity),
+    MIN(discount), MAX(discount), AVG(discount)
+FROM superstore_clean;
+
+-- category overview
+SELECT DISTINCT category FROM superstore_clean;
+SELECT DISTINCT segment FROM superstore_clean;
+SELECT DISTINCT region FROM superstore_clean;
+
+
+
+-- Analysis
+
+USE WAREHOUSE portfolio_wh;
+USE DATABASE portfolio_db;
+USE SCHEMA retail_analytics;
+
+-- 1. OVERALL BUSINESS PERFORMANCE
+-- What is the overall sales, profit, and margin of the business?
+
+
+SELECT 
+    COUNT(DISTINCT order_id) AS total_orders,
+    SUM(sales) AS total_sales,
+    SUM(profit) AS total_profit,
+    AVG(profit_margin) AS avg_profit_margin
+FROM superstore_clean;
+
+-- 2. REGIONAL PERFORMANCE
+-- Which region drives the most revenue and profit?
+-- Are some regions generating high revenue but low profitability?
+
+SELECT 
+    region,
+    COUNT(DISTINCT order_id) AS total_orders,
+    SUM(sales) AS total_sales,
+    SUM(profit) AS total_profit,
+    AVG(profit_margin) AS avg_margin
+FROM superstore_clean
+GROUP BY region
+ORDER BY total_sales DESC;
+
+-- Discount and margin comparison by region
+-- Used to investigate why Central is underperforming
+
+
+SELECT
+    region, 
+    AVG(discount) AS avg_discount,
+    AVG(profit_margin) AS avg_margin
+FROM superstore_clean
+GROUP BY region
+ORDER BY avg_discount DESC;
+
+-- 3. CATEGORY-LEVEL ANALYSIS
+-- Which categories drive revenue vs profitability?
+-- Which categories suffer most from discounting?
+
+SELECT
+    category,
+    SUM(sales) AS total_sales,
+    SUM(profit) AS total_profit,
+    AVG(profit_margin) AS avg_margin,
+    AVG(discount) AS avg_discount
+FROM superstore_clean
+GROUP BY category
+ORDER BY total_sales DESC;
+
+-- Deeper category analysis by region
+-- This is where Furniture and Office Supplies in Central stood out
+
+SELECT
+    region,
+    category,
+    AVG(discount) AS avg_discount,
+    AVG(profit_margin) AS avg_margin
+FROM superstore_clean
+GROUP BY region, category
+ORDER BY region, avg_discount DESC;
+
+-- 4. SEGMENT-LEVEL ANALYSIS
+-- Which customer segments contribute most to revenue and profit?
+-- Which segments are more efficient (higher margin)?
+
+SELECT 
+    segment, 
+    COUNT(DISTINCT order_id) AS total_orders,
+    SUM(sales) AS total_sales,
+    SUM(profit) AS total_profit,
+    AVG(profit_margin) AS avg_margin,
+    AVG(discount) AS avg_discount
+FROM superstore_clean
+GROUP BY segment
+ORDER BY total_sales DESC;
+
+-- 5. DISCOUNT IMPACT ANALYSIS (CORE SECTION)
+-- How are discounts distributed across regions, segments, and categories?
+-- Are higher discounts associated with lower profitability?
+-- At what level of discount does profitability start declining?
+
+-- Discount vs profitability at each discount level
+SELECT
+    discount,
+    COUNT(*) AS total_orders,
+    AVG(profit) AS avg_profit,
+    AVG(profit_margin) AS avg_margin
+FROM superstore_clean
+GROUP BY discount
+ORDER BY discount;
+
+-- Discounts by region
+
+SELECT
+    region, 
+    AVG(discount) AS avg_discount,
+    AVG(profit_margin) AS avg_margin
+FROM superstore_clean
+GROUP BY region
+ORDER BY avg_discount DESC;
+
+-- Discounts by segment
+
+SELECT 
+    segment,
+    AVG(discount) AS avg_discount,
+    AVG(profit_margin) AS avg_margin
+FROM superstore_clean
+GROUP BY segment
+ORDER BY avg_discount DESC;
+
+-- Discounts by category
+
+SELECT
+    category,
+    AVG(discount) AS avg_discount,
+    AVG(profit_margin) AS avg_margin
+FROM superstore_clean
+GROUP BY category
+ORDER BY avg_discount DESC;
+
+
+-- 6. CROSS-DIMENSIONAL ANALYSIS
+-- How do region, segment, and category interact to impact profitability?
+
+-- Segment performance by region
+-- This helped confirm that Central underperforms across all segments
+SELECT
+    segment,
+    region,
+    SUM(sales) AS total_sales,
+    SUM(profit) AS total_profit,
+    AVG(profit_margin) AS avg_margin,
+    AVG(discount) AS avg_discount
+FROM superstore_clean
+GROUP BY segment, region
+ORDER BY segment, total_sales DESC;
+
+-- Category performance by region
+-- This helped isolate Furniture and Office Supplies as loss drivers in Central
+
+SELECT
+    region,
+    category,
+    AVG(discount) AS avg_discount,
+    AVG(profit_margin) AS avg_margin
+FROM superstore_clean
+GROUP BY region, category
+ORDER BY region, avg_discount DESC;
+
+
+-- =========================================================
+-- 7. TIME-BASED ANALYSIS
+-- What are the sales and profit trends over time (yearly and monthly)?
+-- Are there seasonal patterns?
+-- =========================================================
+
+-- Yearly trend
+
+SELECT
+    YEAR(order_date) AS year,
+    SUM(sales) AS total_sales,
+    SUM(profit) AS total_profit,
+    AVG(profit_margin) AS avg_margin,
+    AVG(discount) AS avg_discount
+FROM superstore_clean
+GROUP BY year
+ORDER BY year;
+
+-- Monthly trend
+
+SELECT 
+    DATE_TRUNC('month', order_date) AS month,
+    SUM(sales) AS total_sales,
+    SUM(profit) AS total_profit,
+    AVG(profit_margin) AS avg_margin,
+    AVG(discount) AS avg_discount
+FROM superstore_clean
+GROUP BY month
+ORDER BY month;
+
+
+-- =========================================================
+-- 8. OPERATIONAL INSIGHT (SUPPORTING)
+-- What is the average shipping delay?
+-- Does delay vary by region or ship mode?
+-- =========================================================
+
+-- Shipping delay by region
+
+SELECT
+    region, 
+    AVG(shipping_delay_days) AS avg_shipping_delay,
+    MIN(shipping_delay_days) AS min_delay,
+    MAX(shipping_delay_days) AS max_delay
+FROM superstore_clean
+GROUP BY region
+ORDER BY avg_shipping_delay DESC;
+
+-- Shipping delay by ship mode
+
+SELECT
+    ship_mode,
+    COUNT(*) AS total_orders,
+    AVG(shipping_delay_days) AS avg_shipping_delay,
+    MIN(shipping_delay_days) AS min_delay,
+    MAX(shipping_delay_days) AS max_delay
+FROM superstore_clean
+GROUP BY ship_mode
+ORDER BY avg_shipping_delay DESC;
+
+
+/* 
+Insights
+
+1. Overall Business Performance
+
+The business demonstrates steady growth in both sales and profit over the four-year period, indicating a stable and expanding operation. Profit margins remain relatively consistent (~12%), suggesting controlled profitability despite scaling.
+
+2. Regional Performance
+
+The West region is the strongest performer, generating the highest revenue and maintaining the highest profit margins.
+
+In contrast, the Central region shows significant inefficiency:
+
+High sales volume
+Negative profit margins
+
+This indicates that revenue in Central is not translating into profitability.
+
+3. Category-Level Insights
+Furniture and Office Supplies are the primary drivers of losses, particularly in the Central region.
+Technology remains consistently profitable across regions.
+
+This suggests that not all product categories contribute equally to business success.
+
+4. Segment-Level Insights
+The Consumer segment generates the highest revenue but operates at the lowest profit margin, indicating lower efficiency.
+The Home Office segment has the highest profit margin despite lower sales volume, making it the most efficient segment.
+Corporate sits in between both.
+
+This highlights a trade-off between volume and profitability across segments.
+
+5. Discount Impact (Key Finding)
+
+There is a strong negative relationship between discount levels and profitability:
+
+Regions and categories with higher discounts consistently show lower or negative margins
+The Central region has the highest average discount (~24%), aligning with its negative profitability
+The West region maintains lower discounts (~10–11%), resulting in higher margins
+
+Discounting is the primary contributor to profitability issues
+
+6. Cross-Dimensional Insight (Most Important)
+
+The profitability issue in the Central region is systemic:
+
+All customer segments (Consumer, Corporate, Home Office) show low or negative margins in Central
+Losses are concentrated in Furniture and Office Supplies
+Discounts are consistently high across all segments in this region
+
+-> This confirms that the issue is region-driven, not segment-specific
+
+7. Time-Based Trends
+Sales and profit show consistent upward growth from 2015 onwards
+Minor fluctuations exist (e.g., dip in sales in 2015), but profitability continues to improve
+Monthly analysis indicates seasonality, with peak sales shifting toward November in later years, likely due to promotional periods
+8. Operational Insight (Shipping)
+Average shipping delay is consistent across regions (~3.9–4.0 days)
+Slightly higher delays in Central are negligible
+Shipping performance varies appropriately by ship mode (Same Day fastest, Standard slowest)
+*/
+
+
