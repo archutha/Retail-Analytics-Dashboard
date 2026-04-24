@@ -12,9 +12,11 @@ The goal is to replicate a real business reporting workflow where data is cleane
 Snowflake (data storage and warehousing)
 SQL (data cleaning and analysis)
 Power BI (dashboard development and visualization)
-**Dataset **
+
+**Dataset**
 Retail Superstore dataset
 Contains order-level transaction data including sales, profit, discounts, region, category, customer segment, and shipping details
+
 **Data Workflow**
 Loaded raw dataset into Snowflake using staging
 Created a structured raw table and imported data using COPY INTO
